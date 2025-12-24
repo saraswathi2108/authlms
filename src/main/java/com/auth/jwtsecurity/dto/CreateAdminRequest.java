@@ -13,8 +13,6 @@ public class CreateAdminRequest {
     @NotBlank
     private String fullName;
 
-    @NotBlank
-    private String username;
 
     @NotBlank
     private String password;

@@ -33,17 +33,16 @@ import java.util.*;
 @Service
 public class MobileOtpService {
 
-
-
     private final SnsClient snsClient;
     private final UserRepository userRepository;
     private final OtpRepo otpRepo;
     private final RsaKeyUtil rsaKeyUtil;
-    private PublicKey publicKey;
-    private PrivateKey privateKey;
     private final JwtService jwtService;
     private final JavaMailSender mailSender;
     private final PasswordEncoder passwordEncoder;
+
+    private PublicKey publicKey;
+    private PrivateKey privateKey;
 
     @Autowired
     public MobileOtpService(
@@ -70,62 +69,59 @@ public class MobileOtpService {
         this.privateKey = rsaKeyUtil.loadPrivateKey("classpath:keys/private_key.pem");
     }
 
-    /* ---------------- SEND OTP ---------------- */
+    /* ================= SEND OTP ================= */
 
-    public String sendOtpToUserPhone(String employeeId, String phoneNumber) throws Exception {
-        if ((Objects.equals(employeeId, "np") || employeeId.isEmpty())
-                && (Objects.equals(phoneNumber, "np") || phoneNumber.isEmpty())) {
-            throw new BadRequestException("Either employeeId or phoneNumber must be provided");
+    public String sendOtpToUserPhone(String email, String phoneNumber) throws Exception {
+
+        if ((email == null || email.equals("np")) &&
+                (phoneNumber == null || phoneNumber.equals("np"))) {
+            throw new BadRequestException("Email or phone number must be provided");
         }
 
-        Optional<User> user = employeeId.equals("np")
-                ? userRepository.findByPhoneNumber(phoneNumber)
-                : userRepository.findByUsername(employeeId.toLowerCase());
+        Optional<User> user = (email != null && !email.equals("np"))
+                ? userRepository.findByEmail(email.toLowerCase())
+                : userRepository.findByPhoneNumber(phoneNumber);
 
         if (user.isEmpty()) {
-            throw new BadRequestException("No user found with the provided details");
+            throw new BadRequestException("User not found");
         }
 
         if (user.get().getPhoneNumber() == null) {
-            throw new BadRequestException("Phone number not linked to this account");
+            throw new BadRequestException("Phone number not linked");
         }
 
-        String id = sendOTP(user.get(), "PHONE");
-        return rsaKeyUtil.rsaEncrypt(publicKey, id);
+        String otpId = sendOTP(user.get(), "PHONE");
+        return rsaKeyUtil.rsaEncrypt(publicKey, otpId);
     }
 
-    public String sendOtpToUserEmail(String employeeId, String email) throws Exception {
-        if ((Objects.equals(employeeId, "np") || employeeId.isEmpty())
-                && (Objects.equals(email, "np") || email.isEmpty())) {
-            throw new BadRequestException("Either employeeId or email must be provided");
+    public String sendOtpToUserEmail(String email) throws Exception {
+
+        if (email == null || email.equals("np")) {
+            throw new BadRequestException("Email must be provided");
         }
 
-        Optional<User> user = employeeId.equals("np")
-                ? userRepository.findByEmail(email)
-                : userRepository.findByUsername(employeeId.toLowerCase());
+        User user = userRepository.findByEmail(email.toLowerCase())
+                .orElseThrow(() -> new BadRequestException("User not found"));
 
-        if (user.isEmpty()) {
-            throw new BadRequestException("No user found with the provided details");
+        if (user.getEmail() == null) {
+            throw new BadRequestException("Email not linked");
         }
 
-        if (user.get().getEmail() == null) {
-            throw new BadRequestException("Email not linked to this account");
-        }
-
-        String id = sendOTP(user.get(), "EMAIL");
-        return rsaKeyUtil.rsaEncrypt(publicKey, id);
+        String otpId = sendOTP(user, "EMAIL");
+        return rsaKeyUtil.rsaEncrypt(publicKey, otpId);
     }
 
-    /* ---------------- VERIFY OTP ---------------- */
+    /* ================= VERIFY OTP ================= */
 
-    public TokenPair verifyOTP(String givenOtp, String key) throws Exception {
+    public TokenPair verifyOTP(String givenOtp, String encryptedKey) throws Exception {
 
-        String id = rsaKeyUtil.rsaDecrypt(privateKey, key);
-        OtpStore otpStore = otpRepo.findById(id)
+        String otpId = rsaKeyUtil.rsaDecrypt(privateKey, encryptedKey);
+
+        OtpStore otpStore = otpRepo.findById(otpId)
                 .orElseThrow(() -> new BadRequestException("OTP not found"));
 
         if (otpStore.getExpiryTime().isBefore(Instant.now())) {
-            throw new BadRequestException("OTP has expired");
+            throw new BadRequestException("OTP expired");
         }
 
         if (otpStore.getVerified()) {
@@ -142,37 +138,39 @@ public class MobileOtpService {
         User user = otpStore.getEmployeeID();
 
         UserDetails userDetails = org.springframework.security.core.userdetails.User
-                .withUsername(user.getUsername())
+                .withUsername(user.getEmail())
                 .password(user.getPassword())
-                .roles(String.valueOf(user.getRole()).replaceFirst("^ROLE_", ""))
+                .roles(user.getRole().name().replace("ROLE_", ""))
                 .build();
 
         Authentication authentication =
-                new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                new UsernamePasswordAuthenticationToken(
+                        userDetails,
+                        null,
+                        userDetails.getAuthorities()
+                );
 
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         return jwtService.generateTokenPair(authentication);
     }
 
-    /* ---------------- OTP CORE ---------------- */
+    /* ================= OTP CORE ================= */
 
-    public String sendOTP(User user, String option) {
+    private String sendOTP(User user, String channel) {
 
         String otpCode = generateNumericOtp(6);
 
-        String otpMessage =
-                "Your OTP for account verification is " + otpCode +
-                        ". This OTP is valid for 5 minutes. Please do not share it with anyone.";
+        String message =
+                "Your OTP is " + otpCode +
+                        ". Valid for 5 minutes. Do not share.";
 
-        String messageId = null;
+        String messageId;
 
-        if ("PHONE".equals(option)) {
-            messageId = sendSms(user.getPhoneNumber(), otpMessage);
-        }
-
-        if ("EMAIL".equals(option)) {
-            messageId = sendEmail(user.getEmail(), otpMessage);
+        if ("PHONE".equals(channel)) {
+            messageId = sendSms(user.getPhoneNumber(), message);
+        } else {
+            messageId = sendEmail(user.getEmail(), message);
         }
 
         OtpStore otpStore = OtpStore.builder()
@@ -197,9 +195,9 @@ public class MobileOtpService {
         return otp.toString();
     }
 
-    /* ---------------- SMS & EMAIL ---------------- */
+    /* ================= SMS & EMAIL ================= */
 
-    public String sendSms(String phoneNumber, String message) {
+    private String sendSms(String phoneNumber, String message) {
 
         Map<String, MessageAttributeValue> attributes = new HashMap<>();
         attributes.put("AWS.SNS.SMS.SMSType",
@@ -222,25 +220,20 @@ public class MobileOtpService {
 
         SimpleMailMessage msg = new SimpleMailMessage();
         msg.setTo(email);
-        msg.setSubject("LMS Password Reset OTP");
-        msg.setText(
-                "Dear User,\n\n" +
-                        message +
-                        "\n\nIf you did not request this OTP, please ignore this email.\n\n" +
-                        "Regards,\nLMS Support Team"
-        );
+        msg.setSubject("LMS OTP Verification");
+        msg.setText(message);
 
         mailSender.send(msg);
         return UUID.randomUUID().toString();
     }
 
-    /* ---------------- FORGOT PASSWORD ---------------- */
+    /* ================= FORGOT PASSWORD ================= */
 
     public String sendForgotPasswordOtp(String email) throws Exception {
 
-        Optional<User> userOpt = userRepository.findByEmail(email);
+        Optional<User> userOpt = userRepository.findByEmail(email.toLowerCase());
         if (userOpt.isEmpty()) {
-            return "OTP_SENT";
+            return "OTP_SENT"; // security: do not reveal existence
         }
 
         String otpId = sendOTP(userOpt.get(), "EMAIL");
@@ -264,14 +257,6 @@ public class MobileOtpService {
         OtpStore otpStore = otpRepo.findById(otpId)
                 .orElseThrow(() -> new RuntimeException("OTP not found"));
 
-        if (otpStore.getExpiryTime().isBefore(Instant.now())) {
-            throw new RuntimeException("OTP expired");
-        }
-
-        if (otpStore.getVerified()) {
-            throw new RuntimeException("OTP already used");
-        }
-
         if (!otpStore.getOtp().equals(otp)) {
             throw new RuntimeException("Invalid OTP");
         }
@@ -283,51 +268,4 @@ public class MobileOtpService {
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
     }
-
-    public String OtpSender(String userName, String mail, String phone) throws Exception {
-
-        boolean noUserName = (userName == null || userName.equals("np") || userName.isBlank());
-        boolean noEmail    = (mail == null || mail.equals("np") || mail.isBlank());
-        boolean noPhone    = (phone == null || phone.equals("np") || phone.isBlank());
-
-        if (noUserName && noEmail && noPhone) {
-            throw new BadRequestException("At least one of username, email, or phone must be provided");
-        }
-
-        Optional<User> userOptional = Optional.empty();
-
-        if (!noUserName) {
-            userOptional = userRepository.findByUsername(userName.toLowerCase().trim());
-        } else if (!noEmail) {
-            userOptional = userRepository.findByEmail(mail.trim());
-        } else if (!noPhone) {
-            userOptional = userRepository.findByPhoneNumber(phone.trim());
-        }
-
-        if (userOptional.isEmpty()) {
-            throw new BadRequestException("No user found with the provided details");
-        }
-
-        User user = userOptional.get();
-
-        String otpType;
-
-        if (!noEmail) {
-            if (user.getEmail() == null) {
-                throw new BadRequestException("Email not linked to this account");
-            }
-            otpType = "EMAIL";
-        } else if (!noPhone) {
-            if (user.getPhoneNumber() == null) {
-                throw new BadRequestException("Phone number not linked to this account");
-            }
-            otpType = "PHONE";
-        } else {
-            throw new BadRequestException("Either email or phone must be provided");
-        }
-
-        String otpId = sendOTP(user, otpType);
-        return rsaKeyUtil.rsaEncrypt(publicKey, otpId);
-    }
-
 }

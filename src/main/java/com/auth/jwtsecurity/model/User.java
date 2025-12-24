@@ -2,6 +2,9 @@ package com.auth.jwtsecurity.model;
 
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.CreationTimestamp;
+
+import java.time.LocalDateTime;
 
 @Data
 @NoArgsConstructor
@@ -29,8 +32,7 @@ public class User {
     @Column(name = "full_name", nullable = false, length = 100)
     private String fullName;
 
-    @Column(nullable = false, unique = true, length = 50)
-    private String username;
+
 
     @Column(nullable = false)
     private String password;
@@ -44,13 +46,12 @@ public class User {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Role role;   // ALWAYS ROLE_STUDENT
+    private Role role;
 
 
     @Column(name = "pan_number", nullable = false, unique = true, length = 10)
     private String panNumber;
 
-    // ===== COLLEGE DETAILS =====
 
     @Column(name = "college_name", nullable = false, length = 150)
     private String collegeName;
@@ -61,5 +62,16 @@ public class User {
     @Column(name = "passout_year", nullable = false)
     private Integer passoutYear;
 
+    @Column(name = "force_password_change", nullable = false)
+    private boolean forcePasswordChange = true;
+    // true → random password → must change on first login
+
+    @Column(name = "is_active", nullable = false)
+    private boolean isActive = true;
+    // admin can disable student without deleting
+
+    @CreationTimestamp
+    @Column(name = "created_at", nullable = false, updatable = false)
+    private LocalDateTime createdAt;
 
 }

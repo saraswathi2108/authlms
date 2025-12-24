@@ -15,8 +15,6 @@ public class AdminUser {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false, unique = true)
-    private String username;
 
     @Column(nullable = false)
     private String password;
@@ -26,5 +24,5 @@ public class AdminUser {
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private Role role;   // ROLE_ADMIN
+    private Role role;
 }

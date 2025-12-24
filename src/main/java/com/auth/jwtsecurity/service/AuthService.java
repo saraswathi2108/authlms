@@ -1,220 +1,218 @@
 package com.auth.jwtsecurity.service;
 
-import ch.qos.logback.core.net.SyslogOutputStream;
-//import com.auth.jwtsecurity.Client.TicketsUpdate;
 import com.auth.jwtsecurity.dto.*;
-//import com.auth.jwtsecurity.dto.RefreshTokenRequest;
-import com.auth.jwtsecurity.model.AdminUser;
-import com.auth.jwtsecurity.model.Role;
-import com.auth.jwtsecurity.model.User;
-import com.auth.jwtsecurity.repository.AdminUserRepository;
-import com.auth.jwtsecurity.repository.UserRepository;
+import com.auth.jwtsecurity.model.*;
+import com.auth.jwtsecurity.repository.*;
 import jakarta.transaction.Transactional;
 import jakarta.validation.Valid;
-import lombok.AllArgsConstructor;
-import org.apache.coyote.BadRequestException;
+import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
-import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
-import java.util.Optional;
+import java.time.LocalDateTime;
+import java.util.*;
 import java.util.regex.Pattern;
 
 @Service
-@AllArgsConstructor
+@RequiredArgsConstructor
 public class AuthService {
 
     private final UserRepository userRepository;
+    private final AdminUserRepository adminUserRepository;
+    private final UserSessionRepository userSessionRepository;
+
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
-    private final UserDetailsService userDetailsService;
-//    private final TicketsUpdate ticketsUpdate;
+    private final EmailService emailService;
 
-    private static final Pattern PASSWORD_PATTERN = Pattern.compile(
-            "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&])[A-Za-z\\d@$!%*?&]{8,}$"
-    );
-    private final AdminUserRepository adminUserRepository;
+    private static final Pattern PASSWORD_PATTERN =
+            Pattern.compile("^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d)(?=.*[@$!%*?&]).{8,}$");
+
+    // =====================================================
+    // BULK STUDENT CREATE (ADMIN)
+    // =====================================================
 
     @Transactional
-    public void registerUser(@Valid RegisterRequest request) {
+    public void bulkCreateStudents(List<BulkStudentRequest> students) {
 
-        String username = request.getUsername().toLowerCase().trim();
+        // 1️⃣ Collect emails & PANs
+        List<String> emails = students.stream()
+                .map(s -> s.getEmail().toLowerCase().trim())
+                .toList();
 
-        if (userRepository.existsByUsername(username)) {
-            throw new IllegalArgumentException("Username is already in use");
+        List<String> pans = students.stream()
+                .map(BulkStudentRequest::getPanNumber)
+                .toList();
+
+        // 2️⃣ Fetch existing in ONE query
+        List<String> existingEmails = userRepository.findExistingEmails(emails);
+        List<String> existingPans = userRepository.findExistingPans(pans);
+
+        // 3️⃣ Prepare users
+        List<User> users = new ArrayList<>();
+        Map<String, String> emailPasswordMap = new HashMap<>();
+
+        String defaultPassword = PasswordUtil.generateRandomPassword();
+        String encodedPassword = passwordEncoder.encode(defaultPassword);
+
+        for (BulkStudentRequest req : students) {
+
+            if (existingEmails.contains(req.getEmail())
+                    || existingPans.contains(req.getPanNumber())) {
+                continue;
+            }
+
+            User user = User.builder()
+                    .fullName(req.getFullName())
+                    .email(req.getEmail().toLowerCase().trim())
+                    .phoneNumber(req.getPhoneNumber())
+                    .panNumber(req.getPanNumber())
+                    .collegeName(req.getCollegeName())
+                    .collegeRollNumber(req.getCollegeRollNumber())
+                    .passoutYear(req.getPassoutYear())
+                    .password(encodedPassword)
+                    .role(Role.ROLE_STUDENT)
+                    .forcePasswordChange(true)
+                    .isActive(true)
+                    .createdAt(LocalDateTime.now()) // if not using auditing
+                    .build();
+
+            users.add(user);
+            emailPasswordMap.put(user.getEmail(), defaultPassword);
         }
 
-        if (!isStrongPassword(request.getPassword())) {
-            throw new IllegalArgumentException("Weak password");
-        }
+        // 4️⃣ Single DB call
+        userRepository.saveAll(users);
 
-        User user = User.builder()
-                .fullName(request.getFullName())
-                .username(username)
-                .password(passwordEncoder.encode(request.getPassword()))
-                .email(request.getEmail())
-                .phoneNumber(request.getPhoneNumber())
-                .panNumber(request.getPanNumber())
-                .collegeName(request.getCollegeName())
-                .collegeRollNumber(request.getCollegeRollNumber())
-                .passoutYear(request.getPassoutYear())
-                .role(Role.ROLE_STUDENT)
-                .build();
-
-//       Tickets tickets = Tickets.builder()
-//                       .employeeId(username.toUpperCase().trim())
-//                               .roles(registerRequest.getRole())
-//                                       .build();
-//       ResponseEntity<Tickets> re = ticketsUpdate.createAuth(tickets);
-//       if (!re.getStatusCode().is2xxSuccessful()) throw new RuntimeException("Cant Update Tickets branch");
-        userRepository.save(user);
+        // 5️⃣ Send emails AFTER DB commit
+        emailPasswordMap.forEach((email, pwd) ->
+                emailService.sendStudentCredentials(email, pwd)
+        );
     }
 
-    public void deleteUser(String id) {
-        User user = userRepository.findByUsername(id)
+
+    // =====================================================
+    // LOGIN (ADMIN + STUDENT)
+    // =====================================================
+
+    public TokenPair login(@Valid LoginRequest loginRequest) {
+
+        String email = loginRequest.getEmail().toLowerCase().trim();
+
+        Authentication authentication = authenticationManager.authenticate(
+                new UsernamePasswordAuthenticationToken(
+                        email,
+                        loginRequest.getPassword()
+                )
+        );
+
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+
+        // STUDENT → enforce single login
+        Optional<User> studentOpt = userRepository.findByEmail(email);
+        if (studentOpt.isPresent()) {
+
+            User student = studentOpt.get();
+
+            if (!student.isActive()) {
+                throw new IllegalStateException("Account is deactivated");
+            }
+
+            // 🔥 single-device login
+            userSessionRepository.deleteByUserId(student.getId());
+
+            String sessionId = UUID.randomUUID().toString();
+
+            UserSession session = UserSession.builder()
+                    .user(student)
+                    .sessionId(sessionId)
+                    .lastLoginTime(LocalDateTime.now())
+                    .build();
+
+            userSessionRepository.save(session);
+
+            return jwtService.generateTokenPair(authentication, sessionId);
+        }
+
+        // ADMIN → no session restriction
+        return jwtService.generateTokenPair(authentication, null);
+    }
+
+    // =====================================================
+    // LOGOUT
+    // =====================================================
+
+    @Transactional
+    public void logout(Authentication authentication) {
+
+        String email = authentication.getName().toLowerCase().trim();
+
+        userRepository.findByEmail(email)
+                .ifPresent(user ->
+                        userSessionRepository.deleteByUserId(user.getId())
+                );
+    }
+
+    // =====================================================
+    // UPDATE / DELETE STUDENT (EMAIL)
+    // =====================================================
+
+    @Transactional
+    public void deleteUserByEmail(String email) {
+        User user = userRepository.findByEmail(email.toLowerCase().trim())
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
-//        ResponseEntity<Void> re = ticketsUpdate.deleteAuth(user.getUsername().toUpperCase());
-//        if (!re.getStatusCode().is2xxSuccessful()) throw new RuntimeException("Cant Update Tickets branch");
+        userSessionRepository.deleteByUserId(user.getId());
         userRepository.delete(user);
     }
 
-    public void updateUser(String id, UpdateRequest request) {
-        User user = userRepository.findByUsername(id.toLowerCase().trim())
-                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+    @Transactional
+    public void updateUserByEmail(String email, UpdateRequest request) {
 
-        if (request.getUsername() != null)
-            user.setUsername(request.getUsername().toLowerCase().trim());
+        User user = userRepository.findByEmail(email.toLowerCase().trim())
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         if (request.getFullName() != null)
             user.setFullName(request.getFullName());
-
-        if (request.getPassword() != null)
-            user.setPassword(passwordEncoder.encode(request.getPassword()));
 
         if (request.getPhoneNumber() != null)
             user.setPhoneNumber(request.getPhoneNumber());
 
         if (request.getEmail() != null)
-            user.setEmail(request.getEmail());
+            user.setEmail(request.getEmail().toLowerCase().trim());
 
-//        Tickets tickets = Tickets.builder()
-//                .employeeId(user.getUsername().toUpperCase())
-//                .roles(registerRequest.getRole())
-//                .build();
-//        ResponseEntity<Tickets> re = ticketsUpdate.updateAuth(user.getUsername().toUpperCase(),tickets);
-//        if (!re.getStatusCode().is2xxSuccessful()) throw new RuntimeException("Cant Update Tickets branch");
         userRepository.save(user);
     }
 
-    public TokenPair login(@Valid LoginRequest loginRequest) {
+    // =====================================================
+    // CHANGE PASSWORD
+    // =====================================================
 
-        String email = loginRequest.getEmail().trim();
-
-        Authentication authentication;
-
-        // 1️⃣ Try ADMIN login
-        Optional<AdminUser> adminOpt = adminUserRepository.findByEmail(email);
-
-        if (adminOpt.isPresent()) {
-            authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(
-                            adminOpt.get().getUsername(),
-                            loginRequest.getPassword()
-                    )
-            );
-        }
-        // 2️⃣ Else try STUDENT login
-        else {
-            User user = userRepository.findByEmail(email)
-                    .orElseThrow(() -> new UsernameNotFoundException("Invalid email or password"));
-
-            authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(
-                            user.getUsername(),
-                            loginRequest.getPassword()
-                    )
-            );
-        }
-
-        SecurityContextHolder.getContext().setAuthentication(authentication);
-        return jwtService.generateTokenPair(authentication);
-    }
-
-
-    public TokenPair refreshTokenFromCookie(String refreshToken) {
-        if (!jwtService.isRefreshToken(refreshToken)) {
-            throw new IllegalArgumentException("Invalid refresh token");
-        }
-
-        String username = jwtService.extractUsernameFromToken(refreshToken);
-        UserDetails userDetails = userDetailsService.loadUserByUsername(username);
-
-        if (userDetails == null) {
-            throw new IllegalArgumentException("User not found");
-        }
-
-        UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                userDetails,
-                null,
-                userDetails.getAuthorities()
-        );
-
-        String accessToken = jwtService.generateAccessToken(authentication);
-        return new TokenPair(accessToken, refreshToken);
-    }
-
-    private boolean isStrongPassword(String password) {
-        return PASSWORD_PATTERN.matcher(password).matches();
-    }
     @Transactional
-    public void createAdmin(@Valid CreateAdminRequest request) {
+    public void changePassword(ChangePasswordRequest request,
+                               Authentication authentication) {
 
-        String username = request.getUsername().toLowerCase().trim();
+        String email = authentication.getName().toLowerCase().trim();
 
-        if (userRepository.existsByUsername(username)) {
-            throw new IllegalArgumentException("Username already exists");
+        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
+            throw new IllegalArgumentException("Passwords do not match");
         }
 
-        if (!isStrongPassword(request.getPassword())) {
+        if (!PASSWORD_PATTERN.matcher(request.getNewPassword()).matches()) {
             throw new IllegalArgumentException("Weak password");
         }
 
-        AdminUser admin = AdminUser.builder()
-                .username(request.getUsername().toLowerCase().trim())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .email(request.getEmail())
-                .role(Role.ROLE_ADMIN)
-                .build();
-
-        adminUserRepository.save(admin);
-    }
-
-    @Transactional
-    public void changePassword(
-            ChangePasswordRequest request,
-            Authentication authentication
-    ) {
-
-        String username = authentication.getName().toLowerCase().trim();
-
-        if (!request.getNewPassword().equals(request.getConfirmPassword())) {
-            throw new IllegalArgumentException("New password and confirm password do not match");
-        }
-
-        Optional<AdminUser> adminOpt = adminUserRepository.findByUsername(username);
+        // ADMIN
+        Optional<AdminUser> adminOpt = adminUserRepository.findByEmail(email);
         if (adminOpt.isPresent()) {
 
             AdminUser admin = adminOpt.get();
-
             if (!passwordEncoder.matches(request.getOldPassword(), admin.getPassword())) {
-                throw new IllegalArgumentException("Old password is incorrect");
+                throw new IllegalArgumentException("Old password incorrect");
             }
 
             admin.setPassword(passwordEncoder.encode(request.getNewPassword()));
@@ -222,16 +220,61 @@ public class AuthService {
             return;
         }
 
-        User user = userRepository.findByUsername(username)
+        // STUDENT
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new IllegalArgumentException("User not found"));
 
         if (!passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
-            throw new IllegalArgumentException("Old password is incorrect");
+            throw new IllegalArgumentException("Old password incorrect");
         }
 
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
+        user.setForcePasswordChange(false);
         userRepository.save(user);
     }
 
+    // =====================================================
+    // CREATE ADMIN
+    // =====================================================
 
+    @Transactional
+    public void createAdmin(@Valid CreateAdminRequest request) {
+
+        String email = request.getEmail().toLowerCase().trim();
+
+        if (adminUserRepository.existsByEmail(email)) {
+            throw new IllegalArgumentException("Admin already exists");
+        }
+
+        if (!PASSWORD_PATTERN.matcher(request.getPassword()).matches()) {
+            throw new IllegalArgumentException("Weak password");
+        }
+
+        AdminUser admin = AdminUser.builder()
+                .email(email)
+                .password(passwordEncoder.encode(request.getPassword()))
+                .role(Role.ROLE_ADMIN)
+                .build();
+
+        adminUserRepository.save(admin);
+    }
+
+    // =====================================================
+    // REFRESH TOKEN
+    // =====================================================
+
+    public TokenPair refreshTokenFromCookie(String refreshToken) {
+
+        if (!jwtService.isRefreshToken(refreshToken)) {
+            throw new IllegalArgumentException("Invalid refresh token");
+        }
+
+        String email = jwtService.extractUsernameFromToken(refreshToken);
+
+        Authentication authentication =
+                new UsernamePasswordAuthenticationToken(email, null, List.of());
+
+        String accessToken = jwtService.generateAccessToken(authentication);
+        return new TokenPair(accessToken, refreshToken);
+    }
 }

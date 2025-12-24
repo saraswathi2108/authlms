@@ -21,16 +21,16 @@ public class AdminInitializer implements CommandLineRunner {
     @Override
     public void run(String... args) {
 
-        if (adminRepo.findByUsername("admin").isEmpty()) {
+        if (adminRepo.findByEmail("admin@anasol.com").isEmpty()) {
 
             AdminUser admin = AdminUser.builder()
-                    .username("admin")
+                    .email("admin@anasol.com")
                     .password(passwordEncoder.encode("Admin@123"))
-                    .email("admin@company.com")
                     .role(Role.ROLE_ADMIN)
                     .build();
 
             adminRepo.save(admin);
         }
     }
+
 }

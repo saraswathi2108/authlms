@@ -50,59 +50,69 @@ public class JwtService {
         this.adminUserRepository = adminUserRepository;
     }
 
-    // 🔐 Load RSA keys
     @PostConstruct
     public void initKeys() {
         try {
             privateKey = rsaKeyUtil.loadPrivateKey(privateKeyPath);
             publicKey = (RSAPublicKey) rsaKeyUtil.loadPublicKey(publicKeyPath);
         } catch (Exception e) {
-            log.error("Failed to load RSA keys", e);
             throw new RuntimeException("Error loading RSA keys", e);
         }
     }
 
-    // 🔐 Generate Access + Refresh Token
+    // =====================================================
+    // TOKEN PAIR (BACKWARD COMPATIBLE)
+    // =====================================================
+
     public TokenPair generateTokenPair(Authentication authentication) {
-        String accessToken = generateToken(authentication, jwtExpirationMs, new HashMap<>());
+        return generateTokenPair(authentication, null);
+    }
+
+    // ✅ sessionId OPTIONAL (student only)
+    public TokenPair generateTokenPair(Authentication authentication, String sessionId) {
+        String accessToken = generateToken(authentication, jwtExpirationMs, sessionId, new HashMap<>());
         String refreshToken = generateRefreshToken(authentication);
         return new TokenPair(accessToken, refreshToken);
     }
 
     public String generateAccessToken(Authentication authentication) {
-        return generateToken(authentication, jwtExpirationMs, new HashMap<>());
+        return generateToken(authentication, jwtExpirationMs, null, new HashMap<>());
     }
 
     public String generateRefreshToken(Authentication authentication) {
         Map<String, String> claims = new HashMap<>();
         claims.put("tokenType", "refresh");
-        return generateToken(authentication, refreshExpirationMs, claims);
+        return generateToken(authentication, refreshExpirationMs, null, claims);
     }
 
-    // 🔥 CORE METHOD (ADMIN + STUDENT)
+    // =====================================================
+    // CORE TOKEN GENERATION (SAFE)
+    // =====================================================
+
     private String generateToken(
             Authentication authentication,
             long expirationInMs,
+            String sessionId,
             Map<String, String> additionalClaims
     ) {
 
-        String username = authentication.getName();
+        String email = authentication.getName().toLowerCase().trim();
 
         Long userId;
         String fullName;
         String role;
 
-        // ✅ CHECK ADMIN FIRST
-        Optional<AdminUser> adminOpt = adminUserRepository.findByUsername(username);
+        // ✅ ADMIN (EMAIL)
+        Optional<AdminUser> adminOpt = adminUserRepository.findByEmail(email);
         if (adminOpt.isPresent()) {
             AdminUser admin = adminOpt.get();
             userId = admin.getId();
-            fullName = admin.getUsername(); // or admin.getEmail()
+            fullName = admin.getEmail(); // SAFE
             role = admin.getRole().name().replace("ROLE_", "");
         }
-        // ✅ ELSE STUDENT
+        // ✅ STUDENT (EMAIL)
         else {
-            User user = userRepository.findByUsername(username)
+            User user = userRepository.findByEmail(email)
                     .orElseThrow(() -> new RuntimeException("User not found"));
 
             userId = user.getId();
@@ -118,9 +128,14 @@ public class JwtService {
         claims.put("fullName", fullName);
         claims.put("roles", List.of(role));
 
+        // 🔥 SAFE ADDITION (course service will ignore)
+        if (sessionId != null) {
+            claims.put("sessionId", sessionId);
+        }
+
         return Jwts.builder()
                 .header().add("typ", "JWT").and()
-                .subject(username)              // SAME for admin & student
+                .subject(email)                    // SAME AS BEFORE
                 .issuer("auth-service")
                 .claims(claims)
                 .issuedAt(now)
@@ -129,13 +144,15 @@ public class JwtService {
                 .compact();
     }
 
-    // 🔍 TOKEN VALIDATION
+    // =====================================================
+    // TOKEN UTILITIES (UNCHANGED)
+    // =====================================================
+
     public boolean isValidToken(String token) {
         try {
             extractAllClaims(token);
             return true;
         } catch (Exception e) {
-            log.warn("Invalid token: {}", e.getMessage());
             return false;
         }
     }
@@ -150,34 +167,11 @@ public class JwtService {
     }
 
     public Claims extractAllClaims(String token) {
-        try {
-            return Jwts.parser()
-                    .verifyWith(publicKey)
-                    .build()
-                    .parseSignedClaims(token)
-                    .getPayload();
-        } catch (ExpiredJwtException e) {
-            throw new RuntimeException("Token expired");
-        } catch (JwtException e) {
-            throw new RuntimeException("Invalid token");
-        }
-    }
-
-    public String generatePasswordResetToken(String email) {
-        return Jwts.builder()
-                .subject(email)
-                .claim("purpose", "RESET_PASSWORD")
-                .issuedAt(new Date())
-                .expiration(new Date(System.currentTimeMillis() + 10 * 60 * 1000))
-                .signWith(privateKey, SignatureAlgorithm.RS256)
-                .compact();
-    }
-
-    public void validatePasswordResetToken(String token) {
-        Claims claims = extractAllClaims(token);
-        if (!"RESET_PASSWORD".equals(claims.get("purpose", String.class))) {
-            throw new RuntimeException("Invalid password reset token");
-        }
+        return Jwts.parser()
+                .verifyWith(publicKey)
+                .build()
+                .parseSignedClaims(token)
+                .getPayload();
     }
 
     public RSAPublicKey getRsaPublicKey() {

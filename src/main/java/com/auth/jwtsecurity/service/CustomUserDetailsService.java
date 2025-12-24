@@ -5,7 +5,6 @@ import com.auth.jwtsecurity.model.User;
 import com.auth.jwtsecurity.repository.AdminUserRepository;
 import com.auth.jwtsecurity.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -18,26 +17,28 @@ import java.util.List;
 @RequiredArgsConstructor
 public class CustomUserDetailsService implements UserDetailsService {
 
-    private final AdminUserRepository adminUserRepository;
     private final UserRepository userRepository;
+    private final AdminUserRepository adminUserRepository;
 
     @Override
-    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+    public UserDetails loadUserByUsername(String email) {
 
-        AdminUser admin = adminUserRepository.findByUsername(username).orElse(null);
+        // ADMIN
+        AdminUser admin = adminUserRepository.findByEmail(email).orElse(null);
         if (admin != null) {
             return new org.springframework.security.core.userdetails.User(
-                    admin.getUsername(),
+                    admin.getEmail(),
                     admin.getPassword(),
                     List.of(new SimpleGrantedAuthority(admin.getRole().name()))
             );
         }
 
-        User user = userRepository.findByUsername(username)
+        // STUDENT
+        User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
 
         return new org.springframework.security.core.userdetails.User(
-                user.getUsername(),
+                user.getEmail(),
                 user.getPassword(),
                 List.of(new SimpleGrantedAuthority(user.getRole().name()))
         );

@@ -1,10 +1,6 @@
 package com.auth.jwtsecurity.controller;
 
-import com.auth.jwtsecurity.Client.CustomFeignContext;
-//import com.auth.jwtsecurity.Client.TicketsUpdate;
 import com.auth.jwtsecurity.dto.*;
-import com.auth.jwtsecurity.repository.UserRepository;
-//import com.auth.jwtsecurity.security.CheckPermission;
 import com.auth.jwtsecurity.service.AuthService;
 import com.auth.jwtsecurity.service.MobileOtpService;
 import jakarta.servlet.http.Cookie;
@@ -12,12 +8,12 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.apache.coyote.BadRequestException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -26,51 +22,28 @@ import java.util.Map;
 public class AuthController {
 
     private final AuthService authService;
-    private final UserRepository userRepository;
-    private final CustomFeignContext customFeignContext;
     private final MobileOtpService mobileOtpService;
 
-    @PostMapping("/register")
-//    @CheckPermission("PERMISSIONS_BUTTONS")
-    public ResponseEntity<?> registerUser(@Valid @RequestBody RegisterRequest request) {
-//       customFeignContext.setToken(Authorization);
-        authService.registerUser(request);
-        return ResponseEntity.ok(Map.of("message", "User registered successfully"));
-    }
-
-    @DeleteMapping("/delete/{userId}")
-//    @CheckPermission("PERMISSIONS_BUTTONS")
+    @PostMapping("/students/bulk")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public ResponseEntity<?> deleteUser(@PathVariable String userId, @RequestHeader String Authorization) {
-        customFeignContext.setToken(Authorization);
-        authService.deleteUser(userId.toLowerCase());
-        return ResponseEntity.ok(Map.of("message", "User deleted successfully"));
-    }
-
-    @PutMapping("/update/{userId}")
-//    @CheckPermission("PERMISSIONS_BUTTONS")
-    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public ResponseEntity<?> updateUser(
-            @PathVariable String userId,
-            @RequestBody UpdateRequest request,
-            @RequestHeader String Authorization
+    public ResponseEntity<?> bulkCreateStudents(
+            @RequestBody @Valid List<BulkStudentRequest> students
     ) {
-        customFeignContext.setToken(Authorization);
-        authService.updateUser(userId, request);
-        return ResponseEntity.ok(Map.of("message", "User updated successfully"));
+        authService.bulkCreateStudents(students);
+        return ResponseEntity.ok("Students created successfully");
     }
 
     @PostMapping("/login")
     public ResponseEntity<?> login(
             @Valid @RequestBody LoginRequest loginRequest,
             HttpServletResponse response
-    ) throws BadRequestException {
+    ) {
 
         TokenPair tokenPair = authService.login(loginRequest);
 
         Cookie refreshTokenCookie = new Cookie("refreshToken", tokenPair.getRefreshToken());
         refreshTokenCookie.setHttpOnly(true);
-        refreshTokenCookie.setSecure(false);
+        refreshTokenCookie.setSecure(false); // true in prod with HTTPS
         refreshTokenCookie.setPath("/");
         refreshTokenCookie.setMaxAge(7 * 24 * 60 * 60);
         response.addCookie(refreshTokenCookie);
@@ -86,9 +59,8 @@ public class AuthController {
         cookie.setPath("/");
         cookie.setHttpOnly(true);
         cookie.setMaxAge(0);
-        cookie.setSecure(false);
         response.addCookie(cookie);
-        return ResponseEntity.ok(Map.of("message", "User logged out successfully"));
+        return ResponseEntity.ok(Map.of("message", "Logged out successfully"));
     }
 
     @PostMapping("/refresh-token")
@@ -105,59 +77,43 @@ public class AuthController {
         }
 
         if (refreshToken == null || refreshToken.isEmpty()) {
-            return ResponseEntity.badRequest().body("Missing or empty refresh token");
+            return ResponseEntity.badRequest().body("Missing refresh token");
         }
 
         TokenPair tokenPair = authService.refreshTokenFromCookie(refreshToken);
-
-        return ResponseEntity.ok(
-                Map.of("accessToken", tokenPair.getAccessToken())
-        );
+        return ResponseEntity.ok(Map.of("accessToken", tokenPair.getAccessToken()));
     }
 
-    @PutMapping("/SendOTPPhone")
-    public ResponseEntity<Map<String, String>> SendingOtpPhone(
-            @RequestParam(defaultValue = "np") String phone,
-            @RequestParam(defaultValue = "np") String userName
+    @PutMapping("/otp/email")
+    public ResponseEntity<?> sendOtpToEmail(
+            @RequestParam String email
     ) throws Exception {
 
-        String encrypted = mobileOtpService.sendOtpToUserPhone(userName, phone);
-        return ResponseEntity.ok(Map.of("token", encrypted));
+        String token = mobileOtpService.sendOtpToUserEmail(email);
+        return ResponseEntity.ok(Map.of("token", token));
     }
 
-    @PutMapping("/SendOTP")
-    public ResponseEntity<Map<String, String>> SendingOtp(
-            @RequestParam(defaultValue = "np") String mail,
-            @RequestParam(defaultValue = "np") String userName,
-            @RequestParam(defaultValue = "np") String phone
+    @PutMapping("/otp/phone")
+    public ResponseEntity<?> sendOtpToPhone(
+            @RequestParam String email,
+            @RequestParam String phone
     ) throws Exception {
 
-        String encrypted = mobileOtpService.OtpSender(userName, mail, phone);
-        return ResponseEntity.ok(Map.of("token", encrypted));
+        String token = mobileOtpService.sendOtpToUserPhone(email, phone);
+        return ResponseEntity.ok(Map.of("token", token));
     }
 
-    @PutMapping("/SendOTPMail")
-    public ResponseEntity<Map<String, String>> SendingOtpMail(
-            @RequestParam(defaultValue = "np") String mail,
-            @RequestParam(defaultValue = "np") String userName
-    ) throws Exception {
-
-        String encrypted = mobileOtpService.sendOtpToUserEmail(userName, mail);
-        return ResponseEntity.ok(Map.of("token", encrypted));
-    }
-
-    @PutMapping("/VerifyOTP")
-    public ResponseEntity<?> verifyOTP(
+    @PutMapping("/otp/verify")
+    public ResponseEntity<?> verifyOtp(
             @RequestParam String otp,
-            @RequestHeader String X_OTP_Token,
+            @RequestHeader("X_OTP_Token") String otpToken,
             HttpServletResponse response
     ) throws Exception {
 
-        TokenPair tokenPair = mobileOtpService.verifyOTP(otp, X_OTP_Token);
+        TokenPair tokenPair = mobileOtpService.verifyOTP(otp, otpToken);
 
         Cookie refreshTokenCookie = new Cookie("refreshToken", tokenPair.getRefreshToken());
         refreshTokenCookie.setHttpOnly(true);
-        refreshTokenCookie.setSecure(false);
         refreshTokenCookie.setPath("/");
         refreshTokenCookie.setMaxAge(7 * 24 * 60 * 60);
         response.addCookie(refreshTokenCookie);
@@ -167,27 +123,20 @@ public class AuthController {
         );
     }
 
-    @PostMapping("/admin/create")
-    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
-    public ResponseEntity<?> createAdmin(@RequestBody @Valid CreateAdminRequest request) {
-        authService.createAdmin(request);
-        return ResponseEntity.ok("Admin created successfully");
-    }
-
     @PutMapping("/forgot-password")
-    public ResponseEntity<?> sendForgotPasswordOtp(
+    public ResponseEntity<?> forgotPassword(
             @RequestParam String email
     ) throws Exception {
 
         String otpToken = mobileOtpService.sendForgotPasswordOtp(email);
-
         return ResponseEntity.ok(Map.of(
                 "otpToken", otpToken,
-                "message", "If the email exists, OTP has been sent"
+                "message", "If email exists, OTP sent"
         ));
     }
+
     @PostMapping("/reset-password")
-    public ResponseEntity<?> resetPasswordWithOtp(
+    public ResponseEntity<?> resetPassword(
             @RequestHeader("X_OTP_Token") String otpToken,
             @RequestBody @Valid ResetPasswordWithOtpRequest request
     ) throws Exception {
@@ -199,11 +148,10 @@ public class AuthController {
                 request.getConfirmPassword()
         );
 
-        return ResponseEntity.ok(Map.of(
-                "message", "Password reset successfully"
-        ));
+        return ResponseEntity.ok(Map.of("message", "Password reset successful"));
     }
 
+    // ================= CHANGE PASSWORD =================
     @PostMapping("/change-password")
     public ResponseEntity<?> changePassword(
             @RequestBody @Valid ChangePasswordRequest request,
@@ -213,9 +161,12 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("message", "Password changed successfully"));
     }
 
-
-
-
-
-
+    @PostMapping("/admin/create")
+    @PreAuthorize("hasAuthority('ROLE_ADMIN')")
+    public ResponseEntity<?> createAdmin(
+            @RequestBody @Valid CreateAdminRequest request
+    ) {
+        authService.createAdmin(request);
+        return ResponseEntity.ok("Admin created successfully");
+    }
 }
