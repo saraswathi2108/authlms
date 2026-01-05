@@ -1,6 +1,7 @@
 package com.auth.jwtsecurity.service;
 
 import com.auth.jwtsecurity.dto.*;
+import com.auth.jwtsecurity.exception.AlreadyLoggedInException;
 import com.auth.jwtsecurity.model.*;
 import com.auth.jwtsecurity.repository.*;
 import org.springframework.transaction.annotation.Transactional;
@@ -116,7 +117,12 @@ public class AuthService {
                 throw new IllegalStateException("Account is deactivated");
             }
 
-            userSessionRepository.deleteByUserId(student.getId());
+            // 🔥 CHECK EXISTING SESSION (NO DELETE)
+            if (userSessionRepository.existsByUserId(student.getId())) {
+                throw new AlreadyLoggedInException(
+                        "User already logged in on another device"
+                );
+            }
 
             String sessionId = UUID.randomUUID().toString();
 
@@ -131,9 +137,10 @@ public class AuthService {
             return jwtService.generateTokenPair(authentication, sessionId);
         }
 
-        // ADMIN → no session restriction
+        // ADMIN → no restriction
         return jwtService.generateTokenPair(authentication, null);
     }
+
 
 
     @Transactional

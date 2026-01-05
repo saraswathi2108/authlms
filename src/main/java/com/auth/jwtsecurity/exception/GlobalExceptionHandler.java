@@ -61,4 +61,14 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Internal server error occurred"));
     }
+    @ExceptionHandler(AlreadyLoggedInException.class)
+    public ResponseEntity<?> handleAlreadyLoggedIn(AlreadyLoggedInException ex) {
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(
+                Map.of(
+                        "code", "ALREADY_LOGGED_IN",
+                        "message", ex.getMessage()
+                )
+        );
+    }
+
 }

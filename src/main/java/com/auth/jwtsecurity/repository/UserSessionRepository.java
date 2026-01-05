@@ -14,4 +14,7 @@ public interface UserSessionRepository extends JpaRepository<UserSession, Long> 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     @Transactional
     @Query("delete from UserSession us where us.user.id = :userId")
-    void deleteByUserId(@Param("userId") Long userId);}
+    void deleteByUserId(@Param("userId") Long userId);
+
+    boolean existsByUserId(Long id);
+}
