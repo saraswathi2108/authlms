@@ -28,7 +28,7 @@ public class SecurityConfig {
 
     private final JwtService jwtService;
     private final UserDetailsService userDetailsService;
-    private final UserSessionRepository userSessionRepository; // 🔥
+    private final UserSessionRepository userSessionRepository;
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -37,17 +37,17 @@ public class SecurityConfig {
 
     @Bean
     public AuthenticationProvider authenticationProvider() {
-        DaoAuthenticationProvider authProvider = new DaoAuthenticationProvider();
-        authProvider.setUserDetailsService(userDetailsService);
-        authProvider.setPasswordEncoder(passwordEncoder());
-        return authProvider;
+        DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+        provider.setUserDetailsService(userDetailsService);
+        provider.setPasswordEncoder(passwordEncoder());
+        return provider;
     }
 
     @Bean
     public AuthenticationManager authenticationManager(
-            AuthenticationConfiguration authConfig
+            AuthenticationConfiguration configuration
     ) throws Exception {
-        return authConfig.getAuthenticationManager();
+        return configuration.getAuthenticationManager();
     }
 
     @Bean
@@ -61,12 +61,17 @@ public class SecurityConfig {
         http
                 .cors(cors -> {})
                 .csrf(csrf -> csrf.disable())
-                .sessionManagement(
-                        session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                .sessionManagement(session ->
+                        session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                "/api/auth/**",
+                                "/api/auth/login",
+                                "/api/auth/logout",
+                                "/api/auth/refresh-token",
+                                "/api/auth/otp/**",
+                                "/api/auth/forgot-password",
+                                "/api/auth/reset-password",
                                 "/swagger-ui/**",
                                 "/v3/**"
                         ).permitAll()

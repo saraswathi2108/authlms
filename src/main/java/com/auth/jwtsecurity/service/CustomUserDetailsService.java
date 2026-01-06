@@ -23,8 +23,9 @@ public class CustomUserDetailsService implements UserDetailsService {
     @Override
     public UserDetails loadUserByUsername(String email) {
 
-        // ADMIN
-        AdminUser admin = adminUserRepository.findByEmail(email).orElse(null);
+        String normalizedEmail = email.toLowerCase().trim();
+
+        AdminUser admin = adminUserRepository.findByEmail(normalizedEmail).orElse(null);
         if (admin != null) {
             return new org.springframework.security.core.userdetails.User(
                     admin.getEmail(),
@@ -33,8 +34,7 @@ public class CustomUserDetailsService implements UserDetailsService {
             );
         }
 
-        // STUDENT
-        User user = userRepository.findByEmail(email)
+        User user = userRepository.findByEmail(normalizedEmail)
                 .orElseThrow(() -> new UsernameNotFoundException("User not found"));
 
         return new org.springframework.security.core.userdetails.User(
