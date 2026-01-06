@@ -4,7 +4,7 @@ import com.auth.jwtsecurity.dto.*;
 import com.auth.jwtsecurity.exception.AlreadyLoggedInException;
 import com.auth.jwtsecurity.model.*;
 import com.auth.jwtsecurity.repository.*;
-import org.springframework.transaction.annotation.Transactional;
+import io.jsonwebtoken.Claims;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -13,6 +13,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -25,7 +26,6 @@ public class AuthService {
     private final UserRepository userRepository;
     private final AdminUserRepository adminUserRepository;
     private final UserSessionRepository userSessionRepository;
-
     private final PasswordEncoder passwordEncoder;
     private final AuthenticationManager authenticationManager;
     private final JwtService jwtService;
@@ -36,8 +36,14 @@ public class AuthService {
 
     @Transactional
     public void bulkCreateStudents(List<BulkStudentRequest> students) {
-        List<String> emails = students.stream().map(s -> s.getEmail().toLowerCase().trim()).toList();
-        List<String> pans = students.stream().map(BulkStudentRequest::getPanNumber).toList();
+
+        List<String> emails = students.stream()
+                .map(s -> s.getEmail().toLowerCase().trim())
+                .toList();
+
+        List<String> pans = students.stream()
+                .map(BulkStudentRequest::getPanNumber)
+                .toList();
 
         List<String> existingEmails = userRepository.findExistingEmails(emails);
         List<String> existingPans = userRepository.findExistingPans(pans);
@@ -52,6 +58,7 @@ public class AuthService {
             if (existingEmails.contains(req.getEmail()) || existingPans.contains(req.getPanNumber())) {
                 continue;
             }
+
             User user = User.builder()
                     .fullName(req.getFullName())
                     .email(req.getEmail().toLowerCase().trim())
@@ -66,13 +73,14 @@ public class AuthService {
                     .isActive(true)
                     .createdAt(LocalDateTime.now())
                     .build();
+
             users.add(user);
             emailPasswordMap.put(user.getEmail(), defaultPassword);
         }
+
         userRepository.saveAll(users);
         emailPasswordMap.forEach(emailService::sendStudentCredentials);
     }
-
 
     @Transactional
     public TokenPair login(@Valid LoginRequest loginRequest) {
@@ -86,6 +94,7 @@ public class AuthService {
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         Optional<User> studentOpt = userRepository.findByEmail(email);
+
         if (studentOpt.isPresent()) {
 
             User student = studentOpt.get();
@@ -104,13 +113,13 @@ public class AuthService {
 
             String sessionId = UUID.randomUUID().toString();
 
-            UserSession session = UserSession.builder()
-                    .user(student)
-                    .sessionId(sessionId)
-                    .lastLoginTime(LocalDateTime.now())
-                    .build();
-
-            userSessionRepository.save(session);
+            userSessionRepository.save(
+                    UserSession.builder()
+                            .user(student)
+                            .sessionId(sessionId)
+                            .lastLoginTime(LocalDateTime.now())
+                            .build()
+            );
 
             return jwtService.generateTokenPair(authentication, sessionId);
         }
@@ -121,7 +130,8 @@ public class AuthService {
     @Transactional
     public void logout(Authentication authentication) {
         String email = authentication.getName().toLowerCase().trim();
-        userRepository.findByEmail(email).ifPresent(user -> userSessionRepository.deleteByUserId(user.getId()));
+        userRepository.findByEmail(email)
+                .ifPresent(u -> userSessionRepository.deleteByUserId(u.getId()));
     }
 
     @Transactional
@@ -144,14 +154,21 @@ public class AuthService {
 
     @Transactional
     public void changePassword(ChangePasswordRequest request, Authentication authentication) {
+
         String email = authentication.getName().toLowerCase().trim();
-        if (!request.getNewPassword().equals(request.getConfirmPassword())) throw new IllegalArgumentException("Passwords do not match");
-        if (!PASSWORD_PATTERN.matcher(request.getNewPassword()).matches()) throw new IllegalArgumentException("Weak password");
+
+        if (!request.getNewPassword().equals(request.getConfirmPassword()))
+            throw new IllegalArgumentException("Passwords do not match");
+
+        if (!PASSWORD_PATTERN.matcher(request.getNewPassword()).matches())
+            throw new IllegalArgumentException("Weak password");
 
         Optional<AdminUser> adminOpt = adminUserRepository.findByEmail(email);
+
         if (adminOpt.isPresent()) {
             AdminUser admin = adminOpt.get();
-            if (request.getOldPassword() == null || !passwordEncoder.matches(request.getOldPassword(), admin.getPassword())) {
+            if (request.getOldPassword() == null ||
+                    !passwordEncoder.matches(request.getOldPassword(), admin.getPassword())) {
                 throw new IllegalArgumentException("Old password incorrect");
             }
             admin.setPassword(passwordEncoder.encode(request.getNewPassword()));
@@ -159,40 +176,68 @@ public class AuthService {
             return;
         }
 
-        User user = userRepository.findByEmail(email).orElseThrow(() -> new IllegalArgumentException("User not found"));
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new IllegalArgumentException("User not found"));
+
         if (user.isForcePasswordChange()) {
             user.setPassword(passwordEncoder.encode(request.getNewPassword()));
             user.setForcePasswordChange(false);
             userRepository.save(user);
             return;
         }
-        if (request.getOldPassword() == null || !passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
+
+        if (request.getOldPassword() == null ||
+                !passwordEncoder.matches(request.getOldPassword(), user.getPassword())) {
             throw new IllegalArgumentException("Old password incorrect");
         }
+
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
     }
 
     @Transactional
     public void createAdmin(@Valid CreateAdminRequest request) {
+
         String email = request.getEmail().toLowerCase().trim();
-        if (adminUserRepository.existsByEmail(email)) throw new IllegalArgumentException("Admin already exists");
-        if (!PASSWORD_PATTERN.matcher(request.getPassword()).matches()) throw new IllegalArgumentException("Weak password");
-        AdminUser admin = AdminUser.builder().email(email).password(passwordEncoder.encode(request.getPassword())).role(Role.ROLE_ADMIN).build();
+
+        if (adminUserRepository.existsByEmail(email))
+            throw new IllegalArgumentException("Admin already exists");
+
+        if (!PASSWORD_PATTERN.matcher(request.getPassword()).matches())
+            throw new IllegalArgumentException("Weak password");
+
+        AdminUser admin = AdminUser.builder()
+                .email(email)
+                .password(passwordEncoder.encode(request.getPassword()))
+                .role(Role.ROLE_ADMIN)
+                .build();
+
         adminUserRepository.save(admin);
     }
 
     public TokenPair refreshTokenFromCookie(String refreshToken) {
-        if (!jwtService.isRefreshToken(refreshToken)) throw new IllegalArgumentException("Invalid refresh token");
-        String email = jwtService.extractUsernameFromToken(refreshToken);
-        Authentication authentication = new UsernamePasswordAuthenticationToken(email, null, List.of());
+
+        if (!jwtService.isRefreshToken(refreshToken))
+            throw new IllegalArgumentException("Invalid refresh token");
+
+        Claims claims = jwtService.extractAllClaims(refreshToken);
+
+        String email = claims.getSubject();
+        String sessionId = claims.get("sessionId", String.class);
+
+        if (sessionId != null && !userSessionRepository.existsBySessionId(sessionId))
+            throw new IllegalStateException("Session expired");
+
+        Authentication authentication =
+                new UsernamePasswordAuthenticationToken(email, null, List.of());
+
         String accessToken = jwtService.generateAccessToken(authentication);
         return new TokenPair(accessToken, refreshToken);
     }
+
 
     @Transactional
     public void logoutBySessionId(String sessionId) {
         userSessionRepository.deleteBySessionId(sessionId);
     }
-
 }
