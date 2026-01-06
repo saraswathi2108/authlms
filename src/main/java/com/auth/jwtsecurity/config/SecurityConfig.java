@@ -1,6 +1,7 @@
 package com.auth.jwtsecurity.config;
 
 import com.auth.jwtsecurity.filter.JwtAuthenticationFilter;
+import com.auth.jwtsecurity.repository.UserSessionRepository;
 import com.auth.jwtsecurity.service.JwtService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.context.annotation.Bean;
@@ -27,6 +28,7 @@ public class SecurityConfig {
 
     private final JwtService jwtService;
     private final UserDetailsService userDetailsService;
+    private final UserSessionRepository userSessionRepository; // 🔥
 
     @Bean
     public PasswordEncoder passwordEncoder() {
@@ -42,35 +44,43 @@ public class SecurityConfig {
     }
 
     @Bean
-    public AuthenticationManager authenticationManager(AuthenticationConfiguration authConfig) throws Exception {
+    public AuthenticationManager authenticationManager(
+            AuthenticationConfiguration authConfig
+    ) throws Exception {
         return authConfig.getAuthenticationManager();
     }
 
     @Bean
     public JwtAuthenticationFilter jwtAuthenticationFilter() {
-        return new JwtAuthenticationFilter(jwtService, userDetailsService);
+        return new JwtAuthenticationFilter(jwtService, userSessionRepository);
     }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+
         http
                 .cors(cors -> {})
                 .csrf(csrf -> csrf.disable())
-                .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .sessionManagement(
+                        session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS)
+                )
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
                                 "/api/auth/**",
                                 "/swagger-ui/**",
                                 "/v3/**"
                         ).permitAll()
-                        .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                        .requestMatchers(
+                                org.springframework.http.HttpMethod.OPTIONS, "/**"
+                        ).permitAll()
                         .anyRequest().authenticated()
                 )
                 .authenticationProvider(authenticationProvider())
-                .addFilterBefore(jwtAuthenticationFilter(), UsernamePasswordAuthenticationFilter.class);
+                .addFilterBefore(
+                        jwtAuthenticationFilter(),
+                        UsernamePasswordAuthenticationFilter.class
+                );
 
         return http.build();
     }
-
-
 }

@@ -2,9 +2,9 @@ package com.auth.jwtsecurity.controller;
 
 import com.auth.jwtsecurity.dto.*;
 import com.auth.jwtsecurity.service.AuthService;
-import com.auth.jwtsecurity.service.JwtService; // Added Import
+import com.auth.jwtsecurity.service.JwtService;
 import com.auth.jwtsecurity.service.MobileOtpService;
-import io.jsonwebtoken.Claims; // Added Import
+import io.jsonwebtoken.Claims;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -25,7 +25,7 @@ public class AuthController {
 
     private final AuthService authService;
     private final MobileOtpService mobileOtpService;
-    private final JwtService jwtService; // Inject JwtService to extract claims
+    private final JwtService jwtService;
 
     @PostMapping("/students/bulk")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
@@ -46,17 +46,13 @@ public class AuthController {
 
         Cookie refreshTokenCookie = new Cookie("refreshToken", tokenPair.getRefreshToken());
         refreshTokenCookie.setHttpOnly(true);
-        refreshTokenCookie.setSecure(false); // true in prod with HTTPS
+        refreshTokenCookie.setSecure(false);
         refreshTokenCookie.setPath("/");
         refreshTokenCookie.setMaxAge(7 * 24 * 60 * 60);
         response.addCookie(refreshTokenCookie);
 
-        // --- UPDATED RESPONSE LOGIC ---
-        // Extracting isFirstLogin from the generated token to send in response body
         Claims claims = jwtService.extractAllClaims(tokenPair.getAccessToken());
         Boolean isFirstLogin = claims.get("isFirstLogin", Boolean.class);
-
-        // If null (e.g. admin), default to false
         if (isFirstLogin == null) {
             isFirstLogin = false;
         }
@@ -70,13 +66,36 @@ public class AuthController {
     }
 
     @PostMapping("/logout")
-    public ResponseEntity<?> logout(HttpServletResponse response) {
+    public ResponseEntity<?> logout(
+            HttpServletRequest request,
+            HttpServletResponse response
+    ) {
+
+        String authHeader = request.getHeader("Authorization");
+
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            String token = authHeader.substring(7);
+
+            try {
+                Claims claims = jwtService.extractAllClaims(token);
+                String sessionId = claims.get("sessionId", String.class);
+
+                if (sessionId != null) {
+                    authService.logoutBySessionId(sessionId);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+
         Cookie cookie = new Cookie("refreshToken", null);
-        cookie.setPath("/");
         cookie.setHttpOnly(true);
+        cookie.setPath("/");
         cookie.setMaxAge(0);
         response.addCookie(cookie);
-        return ResponseEntity.ok(Map.of("message", "Logged out successfully"));
+
+        return ResponseEntity.ok(
+                Map.of("message", "Logged out successfully")
+        );
     }
 
     @PostMapping("/refresh-token")
@@ -101,10 +120,7 @@ public class AuthController {
     }
 
     @PutMapping("/otp/email")
-    public ResponseEntity<?> sendOtpToEmail(
-            @RequestParam String email
-    ) throws Exception {
-
+    public ResponseEntity<?> sendOtpToEmail(@RequestParam String email) throws Exception {
         String token = mobileOtpService.sendOtpToUserEmail(email);
         return ResponseEntity.ok(Map.of("token", token));
     }
@@ -114,7 +130,6 @@ public class AuthController {
             @RequestParam String email,
             @RequestParam String phone
     ) throws Exception {
-
         String token = mobileOtpService.sendOtpToUserPhone(email, phone);
         return ResponseEntity.ok(Map.of("token", token));
     }
@@ -134,21 +149,18 @@ public class AuthController {
         refreshTokenCookie.setMaxAge(7 * 24 * 60 * 60);
         response.addCookie(refreshTokenCookie);
 
-        return ResponseEntity.ok(
-                Map.of("accessToken", tokenPair.getAccessToken())
-        );
+        return ResponseEntity.ok(Map.of("accessToken", tokenPair.getAccessToken()));
     }
 
     @PutMapping("/forgot-password")
-    public ResponseEntity<?> forgotPassword(
-            @RequestParam String email
-    ) throws Exception {
-
+    public ResponseEntity<?> forgotPassword(@RequestParam String email) throws Exception {
         String otpToken = mobileOtpService.sendForgotPasswordOtp(email);
-        return ResponseEntity.ok(Map.of(
-                "otpToken", otpToken,
-                "message", "If email exists, OTP sent"
-        ));
+        return ResponseEntity.ok(
+                Map.of(
+                        "otpToken", otpToken,
+                        "message", "If email exists, OTP sent"
+                )
+        );
     }
 
     @PostMapping("/reset-password")
@@ -167,7 +179,6 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("message", "Password reset successful"));
     }
 
-    // ================= CHANGE PASSWORD =================
     @PostMapping("/change-password")
     public ResponseEntity<?> changePassword(
             @RequestBody @Valid ChangePasswordRequest request,

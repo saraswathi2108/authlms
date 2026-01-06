@@ -27,7 +27,6 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                 .body(Map.of("error", "Token has expired"));
     }
-    
 
     @ExceptionHandler(JwtException.class)
     public ResponseEntity<?> handleJwt(JwtException ex) {
@@ -61,6 +60,8 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(Map.of("error", "Internal server error occurred"));
     }
+
+    // 🔥 This handles the Conflict Error
     @ExceptionHandler(AlreadyLoggedInException.class)
     public ResponseEntity<?> handleAlreadyLoggedIn(AlreadyLoggedInException ex) {
         return ResponseEntity.status(HttpStatus.CONFLICT).body(
@@ -70,5 +71,4 @@ public class GlobalExceptionHandler {
                 )
         );
     }
-
 }

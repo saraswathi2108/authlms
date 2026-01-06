@@ -17,4 +17,8 @@ public interface UserSessionRepository extends JpaRepository<UserSession, Long> 
     void deleteByUserId(@Param("userId") Long userId);
 
     boolean existsByUserId(Long id);
+
+    boolean existsBySessionId(String sessionId);
+    void deleteBySessionId(String sessionId);
+
 }

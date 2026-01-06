@@ -245,15 +245,12 @@ public class JwtService {
         }
     }
 
-    // =====================================================
-    // TOKEN PAIR (BACKWARD COMPATIBLE)
-    // =====================================================
+
 
     public TokenPair generateTokenPair(Authentication authentication) {
         return generateTokenPair(authentication, null);
     }
 
-    // ✅ sessionId OPTIONAL (student only)
     public TokenPair generateTokenPair(Authentication authentication, String sessionId) {
         String accessToken = generateToken(authentication, jwtExpirationMs, sessionId, new HashMap<>());
         String refreshToken = generateRefreshToken(authentication);
@@ -270,9 +267,7 @@ public class JwtService {
         return generateToken(authentication, refreshExpirationMs, null, claims);
     }
 
-    // =====================================================
-    // CORE TOKEN GENERATION (SAFE)
-    // =====================================================
+
 
     private String generateToken(
             Authentication authentication,
@@ -286,9 +281,8 @@ public class JwtService {
         Long userId;
         String fullName;
         String role;
-        boolean isFirstLogin = false; // Default for Admin
+        boolean isFirstLogin = false;
 
-        // ✅ ADMIN (EMAIL)
         Optional<AdminUser> adminOpt = adminUserRepository.findByEmail(email);
         if (adminOpt.isPresent()) {
             AdminUser admin = adminOpt.get();
@@ -296,7 +290,6 @@ public class JwtService {
             fullName = admin.getEmail(); // SAFE
             role = admin.getRole().name().replace("ROLE_", "");
         }
-        // ✅ STUDENT (EMAIL)
         else {
             User user = userRepository.findByEmail(email)
                     .orElseThrow(() -> new RuntimeException("User not found"));
@@ -305,8 +298,7 @@ public class JwtService {
             fullName = user.getFullName();
             role = user.getRole().name().replace("ROLE_", "");
 
-            // --- UPDATED LOGIC HERE ---
-            // Checking if the student must change password
+
             isFirstLogin = user.isForcePasswordChange();
         }
 
@@ -318,7 +310,6 @@ public class JwtService {
         claims.put("fullName", fullName);
         claims.put("roles", List.of(role));
 
-        // 🔥 Adding the flag to the Token Payload
         claims.put("isFirstLogin", isFirstLogin);
 
         if (sessionId != null) {
@@ -336,9 +327,6 @@ public class JwtService {
                 .compact();
     }
 
-    // =====================================================
-    // TOKEN UTILITIES (UNCHANGED)
-    // =====================================================
 
     public boolean isValidToken(String token) {
         try {
